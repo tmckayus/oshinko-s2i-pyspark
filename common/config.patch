@@ -1,0 +1,614 @@
+diff --git a/common/oshinko-get-cluster/oshinko-get-cluster.go b/common/oshinko-get-cluster/oshinko-get-cluster.go
+index b43a88c..a154810 100644
+--- a/common/oshinko-get-cluster/oshinko-get-cluster.go
++++ b/common/oshinko-get-cluster/oshinko-get-cluster.go
+@@ -31,17 +31,16 @@ func clusterExists(client *oclient.OshinkoRest, name string) (*models.ClusterMod
+ 	return cl.Payload.Cluster, nil
+ }
+ 
+-func createCluster(client *oclient.OshinkoRest, name string) (*models.ClusterModel, error) {
++func createCluster(client *oclient.OshinkoRest, name, config string) (*models.ClusterModel, error) {
+ 
+ 	var res *models.ClusterModel
+ 	res = nil
+ 
+ 	c := models.NewCluster{}
+-	m := int64(1)
+-	w := int64(3)
+-	c.MasterCount = &m
+-	c.WorkerCount = &w
+ 	c.Name = &name
++	c.Config = &models.NewClusterConfig{}
++	c.Config.Name = config
++
+ 	params := clusters.NewCreateClusterParams().WithCluster(&c)
+ 	cl, err := client.Clusters.CreateCluster(params)
+ 	if err == nil && cl != nil {
+@@ -55,7 +54,7 @@ func createCluster(client *oclient.OshinkoRest, name string) (*models.ClusterMod
+ 		if err != nil || res == nil {
+ 			return nil, err
+ 		}
+-		if int64(len(res.Pods)) != m + w {
++		if int64(len(res.Pods)) != res.Config.MasterCount + res.Config.WorkerCount {
+ 			time.Sleep(time.Second * 1)
+ 		} else {
+ 			break
+@@ -134,7 +133,7 @@ func handleDeleteError(err error) {
+ }
+ 
+ func printCluster(cl *models.ClusterModel) {
+-	fmt.Println(*cl.WorkerCount)
++	fmt.Println(cl.Config.WorkerCount)
+ 	fmt.Println(*cl.MasterURL)
+ 	fmt.Println(*cl.MasterWebURL)
+ }
+@@ -145,6 +144,9 @@ func main() {
+                               "(optional, normally the service can be determined from the pod environment")
+ 	create := flag.Bool("create", false, "create the specified cluster if it does not already exist")
+ 	delete := flag.Bool("delete", false, "delete the specified cluster")
++	config := flag.String("config", "", "named cluster configuration to use " +
++			"(optional, if unspecified oshinko will use the 'default' named configuration")
++
+ 	flag.Parse()
+ 	if *create && *delete {
+ 		fmt.Println("The -delete flag and -create flag are mutually exclusive")
+@@ -189,7 +191,7 @@ func main() {
+ 			printCluster(cl)
+ 		} else if *create {
+ 			fmt.Println("creating")
+-			cl, err = createCluster(c, name)
++			cl, err = createCluster(c, name, *config)
+ 			if err != nil {
+ 				handleCreateError(err)
+ 				os.Exit(-1)
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/clusters_client.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/clusters_client.go
+index f887bad..6716deb 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/clusters_client.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/clusters_client.go
+@@ -37,7 +37,7 @@ func (a *Client) CreateCluster(params *CreateClusterParams) (*CreateClusterCreat
+ 		PathPattern:        "/clusters",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &CreateClusterReader{formats: a.formats},
+ 	})
+@@ -62,7 +62,7 @@ func (a *Client) DeleteSingleCluster(params *DeleteSingleClusterParams) (*Delete
+ 		PathPattern:        "/clusters/{name}",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &DeleteSingleClusterReader{formats: a.formats},
+ 	})
+@@ -87,7 +87,7 @@ func (a *Client) FindClusters(params *FindClustersParams) (*FindClustersOK, erro
+ 		PathPattern:        "/clusters",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &FindClustersReader{formats: a.formats},
+ 	})
+@@ -112,7 +112,7 @@ func (a *Client) FindSingleCluster(params *FindSingleClusterParams) (*FindSingle
+ 		PathPattern:        "/clusters/{name}",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &FindSingleClusterReader{formats: a.formats},
+ 	})
+@@ -137,7 +137,7 @@ func (a *Client) UpdateSingleCluster(params *UpdateSingleClusterParams) (*Update
+ 		PathPattern:        "/clusters/{name}",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &UpdateSingleClusterReader{formats: a.formats},
+ 	})
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_parameters.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_parameters.go
+index 58c3e74..ddf8118 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_parameters.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_parameters.go
+@@ -50,8 +50,8 @@ type CreateClusterParams struct {
+ }
+ 
+ // WithCluster adds the cluster to the create cluster params
+-func (o *CreateClusterParams) WithCluster(Cluster *models.NewCluster) *CreateClusterParams {
+-	o.Cluster = Cluster
++func (o *CreateClusterParams) WithCluster(cluster *models.NewCluster) *CreateClusterParams {
++	o.Cluster = cluster
+ 	return o
+ }
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_responses.go
+index 4e9feef..1132393 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/create_cluster_responses.go
+@@ -19,7 +19,7 @@ type CreateClusterReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *CreateClusterReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+@@ -49,7 +49,7 @@ func NewCreateClusterCreated() *CreateClusterCreated {
+ Cluster create response
+ */
+ type CreateClusterCreated struct {
+-	/*URL of the cluster, this is oshinko specific
++	/*URL of the cluster detail page within the oshinko rest server
+ 	 */
+ 	Location string
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_parameters.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_parameters.go
+index 74b0c69..d1b10a7 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_parameters.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_parameters.go
+@@ -48,8 +48,8 @@ type DeleteSingleClusterParams struct {
+ }
+ 
+ // WithName adds the name to the delete single cluster params
+-func (o *DeleteSingleClusterParams) WithName(Name string) *DeleteSingleClusterParams {
+-	o.Name = Name
++func (o *DeleteSingleClusterParams) WithName(name string) *DeleteSingleClusterParams {
++	o.Name = name
+ 	return o
+ }
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_responses.go
+index 63c05e1..013c252 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/delete_single_cluster_responses.go
+@@ -19,7 +19,7 @@ type DeleteSingleClusterReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *DeleteSingleClusterReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_clusters_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_clusters_responses.go
+index 4bc8f09..12e3aed 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_clusters_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_clusters_responses.go
+@@ -22,7 +22,7 @@ type FindClustersReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *FindClustersReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+@@ -107,6 +107,58 @@ func (o *FindClustersDefault) readResponse(response runtime.ClientResponse, cons
+ 	return nil
+ }
+ 
++/*FindClustersOKBodyBody find clusters o k body body
++
++swagger:model FindClustersOKBodyBody
++*/
++type FindClustersOKBodyBody struct {
++
++	/* clusters
++
++	Required: true
++	*/
++	Clusters []*ClustersItems0 `json:"clusters"`
++}
++
++// Validate validates this find clusters o k body body
++func (o *FindClustersOKBodyBody) Validate(formats strfmt.Registry) error {
++	var res []error
++
++	if err := o.validateClusters(formats); err != nil {
++		// prop
++		res = append(res, err)
++	}
++
++	if len(res) > 0 {
++		return errors.CompositeValidationError(res...)
++	}
++	return nil
++}
++
++func (o *FindClustersOKBodyBody) validateClusters(formats strfmt.Registry) error {
++
++	if err := validate.Required("findClustersOK"+"."+"clusters", "body", o.Clusters); err != nil {
++		return err
++	}
++
++	for i := 0; i < len(o.Clusters); i++ {
++
++		if swag.IsZero(o.Clusters[i]) { // not required
++			continue
++		}
++
++		if o.Clusters[i] != nil {
++
++			if err := o.Clusters[i].Validate(formats); err != nil {
++				return err
++			}
++		}
++
++	}
++
++	return nil
++}
++
+ /*ClustersItems0 clusters items0
+ 
+ swagger:model ClustersItems0
+@@ -243,55 +295,3 @@ func (o *ClustersItems0) validateWorkerCount(formats strfmt.Registry) error {
+ 
+ 	return nil
+ }
+-
+-/*FindClustersOKBodyBody find clusters o k body body
+-
+-swagger:model FindClustersOKBodyBody
+-*/
+-type FindClustersOKBodyBody struct {
+-
+-	/* clusters
+-
+-	Required: true
+-	*/
+-	Clusters []*ClustersItems0 `json:"clusters"`
+-}
+-
+-// Validate validates this find clusters o k body body
+-func (o *FindClustersOKBodyBody) Validate(formats strfmt.Registry) error {
+-	var res []error
+-
+-	if err := o.validateClusters(formats); err != nil {
+-		// prop
+-		res = append(res, err)
+-	}
+-
+-	if len(res) > 0 {
+-		return errors.CompositeValidationError(res...)
+-	}
+-	return nil
+-}
+-
+-func (o *FindClustersOKBodyBody) validateClusters(formats strfmt.Registry) error {
+-
+-	if err := validate.Required("findClustersOK"+"."+"clusters", "body", o.Clusters); err != nil {
+-		return err
+-	}
+-
+-	for i := 0; i < len(o.Clusters); i++ {
+-
+-		if swag.IsZero(o.Clusters[i]) { // not required
+-			continue
+-		}
+-
+-		if o.Clusters[i] != nil {
+-
+-			if err := o.Clusters[i].Validate(formats); err != nil {
+-				return err
+-			}
+-		}
+-
+-	}
+-
+-	return nil
+-}
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_parameters.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_parameters.go
+index 79bddc4..2e8ca76 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_parameters.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_parameters.go
+@@ -48,8 +48,8 @@ type FindSingleClusterParams struct {
+ }
+ 
+ // WithName adds the name to the find single cluster params
+-func (o *FindSingleClusterParams) WithName(Name string) *FindSingleClusterParams {
+-	o.Name = Name
++func (o *FindSingleClusterParams) WithName(name string) *FindSingleClusterParams {
++	o.Name = name
+ 	return o
+ }
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_responses.go
+index 7c07544..4aad6e6 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/find_single_cluster_responses.go
+@@ -19,7 +19,7 @@ type FindSingleClusterReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *FindSingleClusterReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_parameters.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_parameters.go
+index ee280cc..a3368d3 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_parameters.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_parameters.go
+@@ -55,14 +55,14 @@ type UpdateSingleClusterParams struct {
+ }
+ 
+ // WithCluster adds the cluster to the update single cluster params
+-func (o *UpdateSingleClusterParams) WithCluster(Cluster *models.NewCluster) *UpdateSingleClusterParams {
+-	o.Cluster = Cluster
++func (o *UpdateSingleClusterParams) WithCluster(cluster *models.NewCluster) *UpdateSingleClusterParams {
++	o.Cluster = cluster
+ 	return o
+ }
+ 
+ // WithName adds the name to the update single cluster params
+-func (o *UpdateSingleClusterParams) WithName(Name string) *UpdateSingleClusterParams {
+-	o.Name = Name
++func (o *UpdateSingleClusterParams) WithName(name string) *UpdateSingleClusterParams {
++	o.Name = name
+ 	return o
+ }
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_responses.go
+index c2efd3a..08ea4b0 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/clusters/update_single_cluster_responses.go
+@@ -19,7 +19,7 @@ type UpdateSingleClusterReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *UpdateSingleClusterReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/oshinko_rest_client.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/oshinko_rest_client.go
+index 4263349..6a8dc0b 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/oshinko_rest_client.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/oshinko_rest_client.go
+@@ -21,7 +21,7 @@ func NewHTTPClient(formats strfmt.Registry) *OshinkoRest {
+ 	if formats == nil {
+ 		formats = strfmt.Default
+ 	}
+-	transport := httptransport.New("localhost", "/", []string{"http"})
++	transport := httptransport.New("localhost", "/", []string{"https"})
+ 	return New(transport, formats)
+ }
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/get_server_info_responses.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/get_server_info_responses.go
+index d211953..c00cf1c 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/get_server_info_responses.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/get_server_info_responses.go
+@@ -21,7 +21,7 @@ type GetServerInfoReader struct {
+ 	formats strfmt.Registry
+ }
+ 
+-// ReadResponse reads a server response into the recieved o.
++// ReadResponse reads a server response into the received o.
+ func (o *GetServerInfoReader) ReadResponse(response runtime.ClientResponse, consumer runtime.Consumer) (interface{}, error) {
+ 	switch response.Code() {
+ 
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/server_client.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/server_client.go
+index 9e45fc2..4080ee5 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/server_client.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/client/server/server_client.go
+@@ -37,7 +37,7 @@ func (a *Client) GetServerInfo(params *GetServerInfoParams) (*GetServerInfoOK, e
+ 		PathPattern:        "/",
+ 		ProducesMediaTypes: []string{"application/json"},
+ 		ConsumesMediaTypes: []string{"application/json"},
+-		Schemes:            []string{"http"},
++		Schemes:            []string{"https"},
+ 		Params:             params,
+ 		Reader:             &GetServerInfoReader{formats: a.formats},
+ 	})
+diff --git a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/models/new_cluster.go b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/models/new_cluster.go
+index 4d4a02a..983fcaf 100644
+--- a/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/models/new_cluster.go
++++ b/common/oshinko-get-cluster/vendor/github.com/radanalyticsio/oshinko-rest/models/new_cluster.go
+@@ -5,6 +5,7 @@ package models
+ 
+ import (
+ 	strfmt "github.com/go-openapi/strfmt"
++	"github.com/go-openapi/swag"
+ 
+ 	"github.com/go-openapi/errors"
+ 	"github.com/go-openapi/validate"
+@@ -16,30 +17,22 @@ swagger:model NewCluster
+ */
+ type NewCluster struct {
+ 
+-	/* The count of master nodes requested in the cluster
+-
+-	Required: true
+-	*/
+-	MasterCount *int64 `json:"masterCount"`
++	/* config
++	 */
++	Config *NewClusterConfig `json:"config,omitempty"`
+ 
+ 	/* Unique name for the cluster
+ 
+ 	Required: true
+ 	*/
+ 	Name *string `json:"name"`
+-
+-	/* The count of worker nodes requested in the cluster
+-
+-	Required: true
+-	*/
+-	WorkerCount *int64 `json:"workerCount"`
+ }
+ 
+ // Validate validates this new cluster
+ func (m *NewCluster) Validate(formats strfmt.Registry) error {
+ 	var res []error
+ 
+-	if err := m.validateMasterCount(formats); err != nil {
++	if err := m.validateConfig(formats); err != nil {
+ 		// prop
+ 		res = append(res, err)
+ 	}
+@@ -49,21 +42,23 @@ func (m *NewCluster) Validate(formats strfmt.Registry) error {
+ 		res = append(res, err)
+ 	}
+ 
+-	if err := m.validateWorkerCount(formats); err != nil {
+-		// prop
+-		res = append(res, err)
+-	}
+-
+ 	if len(res) > 0 {
+ 		return errors.CompositeValidationError(res...)
+ 	}
+ 	return nil
+ }
+ 
+-func (m *NewCluster) validateMasterCount(formats strfmt.Registry) error {
++func (m *NewCluster) validateConfig(formats strfmt.Registry) error {
+ 
+-	if err := validate.Required("masterCount", "body", m.MasterCount); err != nil {
+-		return err
++	if swag.IsZero(m.Config) { // not required
++		return nil
++	}
++
++	if m.Config != nil {
++
++		if err := m.Config.Validate(formats); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	return nil
+@@ -78,11 +73,31 @@ func (m *NewCluster) validateName(formats strfmt.Registry) error {
+ 	return nil
+ }
+ 
+-func (m *NewCluster) validateWorkerCount(formats strfmt.Registry) error {
++/*NewClusterConfig Cluster configuration values
+ 
+-	if err := validate.Required("workerCount", "body", m.WorkerCount); err != nil {
+-		return err
+-	}
++swagger:model NewClusterConfig
++*/
++type NewClusterConfig struct {
+ 
++	/* The count of master nodes requested in the cluster (must be > 0)
++	 */
++	MasterCount int64 `json:"masterCount,omitempty"`
++
++	/* The name of a stored cluster configuration
++	 */
++	Name interface{} `json:"name,omitempty"`
++
++	/* The count of worker nodes requested in the cluster (must be > 0)
++	 */
++	WorkerCount int64 `json:"workerCount,omitempty"`
++}
++
++// Validate validates this new cluster config
++func (m *NewClusterConfig) Validate(formats strfmt.Registry) error {
++	var res []error
++
++	if len(res) > 0 {
++		return errors.CompositeValidationError(res...)
++	}
+ 	return nil
+ }
+diff --git a/common/utils/start.sh b/common/utils/start.sh
+index 56ab8c2..2139b19 100755
+--- a/common/utils/start.sh
++++ b/common/utils/start.sh
+@@ -17,7 +17,7 @@ fi
+ # The fourth line will be the url of the spark master webui
+ # Split the output by line and store in an array
+ SAVEIFS=$IFS; IFS=$'\n'
+-output=($($APP_ROOT/src/oshinko-get-cluster -create $OSHINKO_CLUSTER_NAME))
++output=($($APP_ROOT/src/oshinko-get-cluster -create -config $OSHINKO_NAMED_CONFIG $OSHINKO_CLUSTER_NAME))
+ res=$?
+ 
+ # Build the spark-submit command and execute
+diff --git a/pyspark/pysparkbuilddc.json b/pyspark/pysparkbuilddc.json
+index 3f6af13..05c1f7e 100644
+--- a/pyspark/pysparkbuilddc.json
++++ b/pyspark/pysparkbuilddc.json
+@@ -24,6 +24,10 @@
+          "name": "OSHINKO_CLUSTER_NAME"
+       },
+       {
++         "description": "The name of a stored cluster configuration to use for this cluster, default is 'default'",
++         "name": "OSHINKO_NAMED_CONFIG"
++      },
++      {
+          "description": "If a cluster is created on-demand, delete the cluster when the application finishes if this option is set to 'true'",
+          "name": "OSHINKO_DEL_CLUSTER",
+          "value": "true",
+@@ -205,6 +209,10 @@
+                            },
+                            {  "name": "APP_EXIT",
+                               "value": "${APP_EXIT}"
++                           },
++                           {
++                              "name": "OSHINKO_NAMED_CONFIG",
++                              "value": "${OSHINKO_NAMED_CONFIG}"
+                            }
+                         ],
+                         "resources": {},
+diff --git a/pyspark/pysparkdc.json b/pyspark/pysparkdc.json
+index 08ab596..8ae0ab9 100644
+--- a/pyspark/pysparkdc.json
++++ b/pyspark/pysparkdc.json
+@@ -29,6 +29,10 @@
+          "name": "OSHINKO_CLUSTER_NAME"
+       },
+       {
++         "description": "The name of a stored cluster configuration to use for this cluster, default is 'default'",
++         "name": "OSHINKO_NAMED_CONFIG"
++      },
++      {
+          "description": "If a cluster is created on-demand, delete the cluster when the application finishes if this option is set to 'true'",
+          "name": "OSHINKO_DEL_CLUSTER",
+          "value": "true",
+@@ -124,6 +128,10 @@
+                            {
+                               "name": "APP_EXIT",
+                               "value": "${APP_EXIT}"
++                           },
++                           {
++                              "name": "OSHINKO_NAMED_CONFIG",
++                              "value": "${OSHINKO_NAMED_CONFIG}"
+                            }
+                         ],
+                         "resources": {},
+diff --git a/pyspark/pysparkjob.json b/pyspark/pysparkjob.json
+index 5346513..9c509d2 100644
+--- a/pyspark/pysparkjob.json
++++ b/pyspark/pysparkjob.json
+@@ -29,6 +29,10 @@
+          "name": "OSHINKO_CLUSTER_NAME"
+       },
+       {
++         "description": "The name of a stored cluster configuration to use for this cluster, default is 'default'",
++         "name": "OSHINKO_NAMED_CONFIG"
++      },
++      {
+          "description": "If a cluster is created on-demand, delete the cluster when the application finishes if this option is set to 'true'",
+          "name": "OSHINKO_DEL_CLUSTER",
+          "value": "true",
+@@ -98,6 +102,10 @@
+                                 {
+                                    "name": "APP_EXIT",
+                                    "value": "true"
++                                },
++                                {
++                                   "name": "OSHINKO_NAMED_CONFIG",
++                                   "value": "${OSHINKO_NAMED_CONFIG}"
+                                 }
+                               ]
+                           }
